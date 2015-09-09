@@ -10,7 +10,7 @@ import (
 
 var (
 	conn = flag.String("conn", "", `Couchbase connection string,
-                                    http://admin:pass@localhost:8091/default`)
+                                    http://localhost:8091/default`)
 	testBench = flag.String("test.bench", ".", "regex to match benchmarks to run")
 )
 
@@ -22,8 +22,8 @@ func main() {
 	bregex := *testBench
 
 	err := (&bench.BenchKVStore{
-		id: 0,
-		Config: &bench.BenchDbConfig{
+		Id: 0,
+		Config: &bench.BenchDBConfig{
 			Regex:  bregex,
 			ShaLen: nsha,
 		},

@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/couchbase/go-couchbase"
 	"golang.org/x/tools/benchmark/parse"
 )
+
+var mutex = &sync.Mutex{}
 
 type BenchDB interface {
 	Run() error
@@ -29,49 +31,25 @@ type BenchDBConfig struct {
 	ShaLen int
 }
 
-type counter64 int64
-
 type BenchKVStore struct {
-	id      *counter64
+	Id      int64
 	Config  *BenchDBConfig
 	Driver  string
 	Connstr string
-	// sample connstr: http://ops:password@localhost:8091/default
-	bucketObj *couchbase.Bucket
-}
 
-type JSONTime time.Time
+    bucketObj *couchbase.Bucket
+}
 
 type Doc struct {
-	id                 int64    `json:"id"`
-	batch_id           string   `json:"batch_id"`
-	latest_sha         string   `json:"latest_sha"`
-	datetime           JSONTime `json:"datetime"`
-	name               string   `json:"name"`
-	n                  int      `json:"n"`
-	ns_op              float64  `json:"ns_op"`
-	allocated_bytes_op uint64   `json:"allocated_bytes_op"`
-	allocs_op          uint64   `json:"allocs_op"`
-}
-
-func (t JSONTime) MarshalJSON() ([]byte, error) {
-	//do your serializing here
-	stamp := fmt.Sprintf("\"%s\"", time.Time(t).Format("Mon Jan 2 15:04:05 +0530 IST 2006"))
-	return []byte(stamp), nil
-}
-
-func (c *counter64) increment() int64 {
-	var next int64
-	for {
-		next = int64(*c) + 1
-		if atomic.CompareAndSwapInt64((*int64)(c), int64(*c), next) {
-			return next
-		}
-	}
-}
-
-func (c *counter64) get() int64 {
-	return atomic.LoadInt64((*int64)(c))
+	Id               int64   `json:"id"`
+	BatchId          string  `json:"batch_id"`
+	LatestSha        string  `json:"latest_sha"`
+	DateTime         string  `json:"datetime"`
+	Name             string  `json:"name"`
+	N                int     `json:"n"`
+	NsOp             float64 `json:"ns_op"`
+	AllocatedBytesOp uint64  `json:"allocated_bytes_op"`
+	AllocsOp         uint64  `json:"allocs_op"`
 }
 
 func (benchdb *BenchKVStore) Run() error {
@@ -116,8 +94,14 @@ func (benchdb *BenchKVStore) WriteSet(benchSet parse.Set) (int, error) {
 
 	for _, b := range benchSet {
 		n := len(b)
+        fmt.Printf("LENGTH n: %d b: %v\n", n, b)
 		for i := 0; i < n; i++ {
-			fmt.Println("AbhI:", b[i], batchId)
+			val := b[i]
+            fmt.Printf("val: %v\n", val)
+			err := benchdb.saveBenchmark(batchId, *val)
+			if err != nil {
+				return 0, fmt.Errorf("Failed to save benchmark, err: %v", err)
+			}
 		}
 	}
 	return 0, nil
@@ -130,29 +114,37 @@ func (benchdb *BenchKVStore) saveBenchmark(batchId string, b parse.Benchmark) er
 	}
 
 	sName := strings.TrimPrefix(strings.TrimSpace(b.Name), "Benchmark")
-	ts := JSONTime(time.Now())
+
+	t := time.Now()
+	ts := t.Format(time.RFC3339)
+
 	//Increment the counter
-	benchdb.id.increment()
-	id := benchdb.id.get()
+	mutex.Lock()
+	benchdb.Id = benchdb.Id + 1
+	mutex.Unlock()
 
 	bStats := &Doc{
-		id:                 id,
-		batch_id:           batchId,
-		latest_sha:         sha,
-		datetime:           ts,
-		name:               sName,
-		n:                  b.N,
-		ns_op:              b.NsPerOp,
-		allocated_bytes_op: b.AllocedBytesPerOp,
-		allocs_op:          b.AllocsPerOp}
+		Id:               benchdb.Id,
+		BatchId:          batchId,
+		LatestSha:        sha,
+		DateTime:         ts,
+		Name:             sName,
+		N:                b.N,
+		NsOp:             b.NsPerOp,
+		AllocatedBytesOp: b.AllocedBytesPerOp,
+		AllocsOp:         b.AllocsPerOp}
 
 	data, err := json.Marshal(bStats)
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
-	key := fmt.Sprintf("%d", id)
+
+	key := fmt.Sprintf("%d", benchdb.Id)
+    fmt.Printf("Key: %s, value: %v\n", key, string(data))
 	err = benchdb.bucketObj.SetRaw(key, 0, data)
-	return err
+	mf("Bucket set failed", err)
+    return err
 }
 
 func latestGitSha(n int) (string, error) {
@@ -173,6 +165,6 @@ func uuid() (string, error) {
 
 func mf(errString string, err error) {
 	if err != nil {
-		log.Fatalf("%s err: %v\n", errString, err)
+		log.Printf("%s err: %v\n", errString, err)
 	}
 }
