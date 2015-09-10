@@ -22,7 +22,6 @@ func main() {
 	bregex := *testBench
 
 	err := (&bench.BenchKVStore{
-		Id: 0,
 		Config: &bench.BenchDBConfig{
 			Regex:  bregex,
 			ShaLen: nsha,
